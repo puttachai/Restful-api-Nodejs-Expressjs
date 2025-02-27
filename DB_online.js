@@ -5,21 +5,27 @@ const cors = require('cors'); // Import CORS module
 const jwt = require('jsonwebtoken');
 const app = express();
 require('dotenv').config();
-const http = require('http'); // ✅ เพิ่มบรรทัดนี้
+// const http = require('http'); // ✅ เพิ่มบรรทัดนี้
 const WebSocket = require('ws');
-const QRCode = require('qrcode');
+// const QRCode = require('qrcode');
 const PORT = 5000;//3002 process.env.PORT || process.env.PORT || 5000
 //const BASE_URL = process.env.REACT_APP_BASE_URL;
 const TOKEN_PROCESS = process.env.JWT_SECRET;
 console.log("Show Token: ",TOKEN_PROCESS);
 //const HOST = "https://5991-49-49-230-168.ngrok-free.app";
 
+const Omise = require("omise");
+
 // สร้าง HTTP Server จาก Express
-const server = http.createServer(app);
+// const server = http.createServer(app);
 
 // สร้าง WebSocket Server ที่ใช้ HTTP Server เดียวกัน
-const wss = new WebSocket.Server({ port: 5001 });
-console.log('wss: ',wss);
+// const wss = new WebSocket.Server({ port: 5001 });
+// console.log('wss: ',wss);
+
+const WSS_PORT = 5001;
+
+let orderStatus = {}; // เก็บสถานะคำสั่งซื้อ
 
 const multer = require('multer');
 const fs = require('fs');
@@ -541,9 +547,6 @@ module.exports = authenticateToken;
 
 // const ADD_CATEGORY_QUERY = `INSERT INTO categories (name, description) VALUES (?, ?)`;
 
-// กำหนดเส้นทางการบันทึกภาพ
-const firstDestination = path.resolve(__dirname, "../frontend/public/images/product");
-const secondDestination = "C:/xampp/htdocs/QBAdminUi-Laravel-Boilerplate-master/public/images/products";
 
 // const storagesellers = multer.diskStorage({
 //   destination: (req, file, cb) => {
@@ -553,6 +556,193 @@ const secondDestination = "C:/xampp/htdocs/QBAdminUi-Laravel-Boilerplate-master/
 //     cb(null, Date.now() + path.extname(file.originalname)); // ตั้งชื่อไฟล์แบบไม่ซ้ำ
 //   },
 // });
+
+
+app.get('/api/check-seller', (req, res) => {
+  const userId = req.query.userId; // Use req.query for GET requests
+  console.log("check-seller: ", userId);
+
+  if (!userId) {
+    return res.status(401).json({ message: "Unauthorized" });
+  }
+
+  const CHECK_SELLER_QUERY = `SELECT * FROM sellers WHERE seller_id = ?`;
+
+  poolLoginlaravel.getConnection()
+    .then(conn => {
+      return conn.query(CHECK_SELLER_QUERY, [userId])
+        .then(results => {
+          conn.release();
+          const isSeller = results.length > 0;
+          console.log("isSeller: ", isSeller);
+          return res.status(200).json({ isSeller });
+        })
+        .catch(err => {
+          conn.release();
+          console.error("Database query error:", err);
+          if (!res.headersSent) {
+            return res.status(500).json({ message: "Internal Server Error" });
+          }
+        });
+    })
+    .catch(err => {
+      console.error("Database connection error:", err);
+      if (!res.headersSent) {
+        return res.status(500).json({ message: "Internal Server Error" });
+      }
+    });
+});
+
+
+
+// กำหนดโฟลเดอร์สำหรับเก็บไฟล์อัปโหลด
+// const storageSeller = multer.diskStorage({
+//   destination: "./public/uploads/id_cards",
+//   filename: (req, file, cb) => {
+//     cb(null, Date.now() + path.extname(file.originalname));
+//   },
+// });
+
+// กำหนดเส้นทางการบันทึกภาพ
+const firstDestinationSelle = path.resolve(__dirname, "../frontend/public/images/thai-id-card");
+const secondDestinationSelle = "C:/xampp/htdocs/QBAdminUi-Laravel-Boilerplate-master/public/images/products"; //thai-id-card
+
+const storageSeller = multer.diskStorage({
+  destination: (req, file, cb) => {
+    cb(null, firstDestinationSelle); // บันทึกที่แรก
+  },
+  filename: (req, file, cb) => {
+    const uniqueName = Date.now() + path.extname(file.originalname);
+    cb(null, uniqueName);
+  },
+});
+
+const uploads = multer({ storage: storageSeller }); // แก้จาก `storageSeller` เป็น `storage`
+
+// API ลงทะเบียนผู้ขาย
+app.post("/api/sellers/register", uploads.single("id_card_copy"), async (req, res) => {
+  const { userId, shop_name, pickup_address, email, phone_number, thai_national_id } = req.body;
+  const id_card_copy = req.file ? req.file.filename : null; // ไฟล์รูปภาพที่อัปโหลด
+
+  console.log("Check Body:",req.body);
+  console.log("Check userId: ",userId);
+  console.log("Check id_card_copy: ",id_card_copy);
+
+  if (!shop_name || !pickup_address || !email || !phone_number || !thai_national_id || !id_card_copy) {
+    return res.status(400).json({ success: false, message: "All fields are required!" });
+  }
+
+  const image = req.file ? req.file.filename : null;
+
+  if (!image) {
+    return res.status(400).json({ message: "Image is required." });
+  }
+
+  // คัดลอกไฟล์ไปยังปลายทางที่สอง
+  const sourcePath = path.join(firstDestinationSelle, image);
+  const targetPath = path.join(secondDestinationSelle, image);
+
+  console.log("Image filename: ", image);
+
+  fs.copyFile(sourcePath, targetPath, (err) => {
+    if (err) {
+      console.error("Error copying file:", err);
+    } else {
+      console.log("File copied to second destination:", targetPath);
+    }
+  });
+
+  let conn;
+  try {
+    conn = await poolLoginlaravel.getConnection();
+
+        // ดึง name และ password จาก users โดยใช้ userId
+        const user = await conn.query("SELECT name, password FROM users WHERE id = ?", userId);
+
+        if (!user || user.length === 0) {
+          return res.status(404).json({ success: false, message: "User not found!" });
+        }
+    
+        const { name, password } = user[0]; // ดึงค่ามาใช้งาน
+
+    const INSERT_REGISTER_SELLER_DATA = `INSERT INTO sellers (seller_id, name, email, Pickup_address, password, shop_name, phone_number, thai_national_id, id_card_copy) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`;
+    const insertSeller = await conn.query(INSERT_REGISTER_SELLER_DATA, [userId, name, email, pickup_address, password, shop_name, phone_number, thai_national_id, id_card_copy]);
+    console.log("Log insertSeller Before: ",insertSeller);
+
+    // อัปเดต statusSellers เป็น 'seller' ในตาราง users
+    const UPDATE_USER_STATUS = `UPDATE users SET statusSellers = 'seller' WHERE id = ?`;
+    const updateStatusSeller = await conn.query(UPDATE_USER_STATUS, userId);
+    console.log("Log updateStatusSeller Before: ",updateStatusSeller);
+
+    res.json({ success: true, message: "Seller registered successfully!" });
+  } catch (error) {
+    console.error("Database Error:", error.message);
+    res.status(500).json({ success: false, message: "Database error", error });
+  } finally {
+    if (conn) conn.release(); // ปิดการเชื่อมต่อฐานข้อมูล
+  }
+});
+
+
+app.get('/api/check-status-user_seller/:userId', async (req, res) => {
+  res.set('Cache-Control', 'no-store');
+  // console.log("ข้อมูลที่ได้รับจาก body: ", req.body);
+
+  const { userId } = req.params; // รับ userId จาก URL
+
+  if (!userId) {
+    return res.status(400).json({ message: "Some fields are missing or invalid." });
+  }
+
+  try {
+
+    const conn = await poolLoginlaravel.getConnection();
+
+    try {
+
+      // ดึงข้อมูล user ที่มีสถานะเป็น seller มีอยู่ในระบบออกมา
+      // const GET_STATUS_SELLER_QUERY = await conn.query(`SELECT statusSellers FROM users WHERE id = ?`, userId);
+      // console.log("userStatus: ", GET_STATUS_SELLER_QUERY);
+
+      // ดึงข้อมูล user ที่มีสถานะเป็น seller มีอยู่ในระบบออกมา
+      const GET_STATUS_SELLER_QUERY = `SELECT statusSellers FROM users WHERE id = ?`;
+      // const StatusUserSeller = await conn.query(GET_STATUS_SELLER_QUERYS, userId);
+      // console.log("Log StatusUserSeller Before: ",StatusUserSeller);
+
+      const statusResult = await conn.query(GET_STATUS_SELLER_QUERY, userId); // ดึงข้อมูลจากฐานข้อมูล
+
+      console.log("Log StatusResult: ", statusResult);
+
+      if (!statusResult || statusResult.length === 0) {
+        return res.status(404).json({ message: "User not found or status not available." });
+      }
+
+      const isSeller = statusResult[0].statusSellers === 'seller'; // ตรวจสอบว่า user เป็น seller หรือไม่
+
+      res.json({
+        isSeller,  // ส่งกลับสถานะว่าเป็น seller หรือไม่
+        message: "UserSellerstatus successfully"
+      });
+
+      // if (!GET_STATUS_SELLER_QUERYS) {
+      //   return res.status(500).json({ message: "Failed to GET StatusUsersellers." });
+      // }
+
+      // res.json({
+      //   message: "UserSellerstatus successfully",
+      // });
+    } catch (queryErr) {
+      console.error("Database Query Error:", queryErr.message);
+      res.status(500).json({ message: "Failed to try.", error: queryErr.message });
+    } finally {
+      conn.release(); // ปิดการเชื่อมต่อฐานข้อมูล
+    }
+  } catch (connErr) {
+    console.error("Database Connection Error:", connErr.message);
+    res.status(500).json({ message: "Failed to connect to database", error: connErr.message });
+  }
+});
+
 
 // ตั้งค่า multer
 const storagesellers = multer.diskStorage({
@@ -574,115 +764,10 @@ const ADD_PRODUCT_QUERY = `
   VALUES (?, ?, ?, ?, ?, ?, ?, ?)
 `;
 
-// app.post('/api/sellers-add-product', uploadseller.single('image'), async (req, res) => {
-//   res.set('Cache-Control', 'no-store');
-//   console.log("ข้อมูลที่ได้รับจาก body: ", req.body);
-//   console.log("ข้อมูลที่ได้รับจากไฟล์: ", req.file);
 
-//   const { name, price, qty, description, category, brand, sellerId } = req.body;
-
-//   // Convert price and qty to numbers
-//   // const priceValue = parseFloat(price);
-//   // const qtyValue = parseInt(qty, 10);
-
-//   // if (isNaN(priceValue) || isNaN(qtyValue)) {
-//   //   return res.status(400).json({ message: "Invalid price or quantity." });
-//   // }
-
-//   const image = req.file ? req.file.filename : null;
-
-//   if (!image) {
-//     return res.status(400).json({ message: "Image is required." });
-//   }
-
-//   console.log("Image filename: ", image);
-//   console.log("sellerId: ", sellerId);
-
-//   if (!name || !price || !qty || !description || !category || !brand || !sellerId) {
-//     return res.status(400).json({ message: "Some fields are missing or invalid." });
-//   }
-
-//   try {
-//     const conn = await poolLoginlaravel.getConnection();
-
-//     try {
-//       // ตรวจสอบว่า seller_id มีอยู่ในระบบหรือไม่
-//       const [sellerExists] = await conn.query(`SELECT seller_id FROM sellers WHERE seller_id = ?`, [sellerId]);
-//       console.log("sellerExists: ", sellerExists);
-
-//       // ตรวจสอบ category
-//       // const [categoryDataArray] = await conn.query(GET_CATEGORY_QUERY, [category]);
-//       // console.log("categoryDataArray: ", categoryDataArray);
-//       const categoryDataArray = await conn.query(GET_CATEGORY_QUERY, [category]);
-//       console.log("categoryDataArray: ", categoryDataArray);
-
-//       // ตรวจสอบว่าเป็นอาเรย์และมีข้อมูล
-//       // if (Array.isArray(categoryDataArray) && categoryDataArray.length > 0) {
-//       //   const categoryId = categoryDataArray[0].categories_id;
-//       //   const categoriesId = String(categoryId);
-//       //   console.log("categoriesId: ", categoriesId);
-//       // } else {
-//       //   return res.status(400).json({ message: "ไม่พบหมวดหมู่ที่ระบุ." });
-//       // }
-
-//       // const categoryId = [categoryDataArray]; // Access the first element
-//       const categoryId = categoryDataArray.categories_id; // เข้าถึง categories_id โดยตรง
-//       const categoriesId = String(categoryId);
-//       console.log("categoriesId: ", categoriesId);
-
-//       // เพิ่มข้อมูลสินค้า
-//       const [insertProductResult] = await conn.query(ADD_PRODUCT_QUERY, [
-//         categoriesId,
-//         // JSON.stringify(categoryId),  // ส่ง categoryId เป็นอ็อบเจ็กต์ที่แปลงเป็น JSON string
-//         name,
-//         // priceValue,
-//         // qtyValue,
-//         price,
-//         qty,
-//         image,
-//         description,
-//         brand,
-//         sellerId,
-//       ],
-//       console.log("all log:",categoriesId,
-//         name,
-//         // priceValue,
-//         // qtyValue,
-//         price,
-//         qty,
-//         image,
-//         description,
-//         brand,
-//         sellerId,
-//         // sellerExistssCons
-//       ));
-
-//       console.log("insertProductResult: ", insertProductResult);
-
-//       if (!insertProductResult || !insertProductResult.insertId) {
-//         return res.status(500).json({ message: "Failed to insert product." });
-//       }
-
-//       // // ดึงข้อมูลสินค้าที่เพิ่มสำเร็จ
-//       // const [product] = await conn.query(`SELECT * FROM products WHERE id = ?`, [insertProductResult.insertId]);
-//       // console.log("product: ", product);
-
-//       res.json({
-//         message: "Product added successfully",
-//         // product: product,
-//       });
-//     } catch (queryErr) {
-//       console.error("Database Query Error:", queryErr.message);
-//       res.status(500).json({ message: "Failed to add product", error: queryErr.message });
-//     } finally {
-//       conn.release(); // ปิดการเชื่อมต่อฐานข้อมูล
-//     }
-//   } catch (connErr) {
-//     console.error("Database Connection Error:", connErr.message);
-//     res.status(500).json({ message: "Failed to connect to database", error: connErr.message });
-//   }
-// });
-
+// กำหนดเส้นทางการบันทึกภาพ
+const firstDestination = path.resolve(__dirname, "../frontend/public/images/product");
+const secondDestination = "C:/xampp/htdocs/QBAdminUi-Laravel-Boilerplate-master/public/images/products";
 
 app.post('/api/sellers-add-product', uploadseller.single('image'), async (req, res) => {
   res.set('Cache-Control', 'no-store');
@@ -780,6 +865,186 @@ app.post('/api/sellers-add-product', uploadseller.single('image'), async (req, r
     res.status(500).json({ message: "Failed to connect to database", error: connErr.message });
   }
 });
+
+
+
+////
+// ตั้งค่า multer
+const storagePayments = multer.diskStorage({
+  destination: (req, file, cb) => {
+    cb(null, firstDestination); // บันทึกที่แรก
+  },
+  filename: (req, file, cb) => {
+    const uniqueName = Date.now() + path.extname(file.originalname);
+    cb(null, uniqueName);
+  },
+});
+
+const uploadPayments = multer({ storage: storagePayments });
+
+const UPDATE_ORDERSEXAMPLE_QUERY = `UPDATE ordersexample SET slip_image = ? WHERE order_id = ? AND user_id = ?`;
+
+// กำหนดเส้นทางการบันทึกภาพ
+const firstDestinationSlip_image = path.resolve(__dirname, "../frontend/public/images/slip_image");
+const secondDestinationSlip_image = "C:/xampp/htdocs/QBAdminUi-Laravel-Boilerplate-master/public/images/products"; // slip_image
+
+
+app.post('/api/order/uploadImagess', uploadPayments.single('image'), async (req, res) => {
+  res.set('Cache-Control', 'no-store');
+  console.log("ข้อมูลที่ได้รับจาก body: ", req.body);
+  console.log("ข้อมูลที่ได้รับจากไฟล์: ", req.file);
+
+  const { userId, orderId } = req.body;
+  const image = req.file ? req.file.filename : null;
+
+  if (!image) {
+    return res.status(400).json({ message: "Image is required." });
+  }
+
+  // คัดลอกไฟล์ไปยังปลายทางที่สอง
+  const sourcePath = path.join(firstDestinationSlip_image, image);
+  const targetPath = path.join(secondDestinationSlip_image, image);
+
+  console.log("Image filename: ", image);
+  console.log("userId: ", userId);
+  console.log("orderId: ", orderId);
+
+  if (!userId || !orderId) {
+    return res.status(400).json({ message: "Some fields are missing or invalid." });
+  }
+
+  fs.copyFile(sourcePath, targetPath, (err) => {
+    if (err) {
+      console.error("Error copying file:", err);
+    } else {
+      console.log("File copied to second destination:", targetPath);
+    }
+  });
+
+  let conn;
+  try {
+    conn = await poolLoginlaravel.getConnection(); // สร้างการเชื่อมต่อกับฐานข้อมูล
+
+    // ตรวจสอบว่า userId มีอยู่ในฐานข้อมูลหรือไม่
+    const userIdExists = await conn.query(`SELECT user_id FROM ordersexample WHERE user_id = ?`, [userId]);
+    console.log("userIdExists: ", userIdExists);
+
+    // อัปเดต slip_image ในฐานข้อมูล
+    const updateResult = await conn.query(UPDATE_ORDERSEXAMPLE_QUERY, [
+      image,
+      orderId,
+      userId
+    ]);
+
+    console.log("Update result: ", updateResult);
+
+    if (!updateResult) {
+      return res.status(500).json({ message: "Failed to update slip image." });
+    }
+
+    res.json({
+      message: "Update slip image successfully",
+    });
+  } catch (queryErr) {
+    console.error("Database Query Error:", queryErr.message);
+    res.status(500).json({ message: "Failed to update slip image", error: queryErr.message });
+  } finally {
+    if (conn) {
+      conn.release(); // ปิดการเชื่อมต่อฐานข้อมูลหลังจากการใช้เสร็จ
+    }
+  }
+});
+
+
+
+// app.post('/api/order/uploadImagess', uploadPayments.single('image'), async (req, res) => {
+//   res.set('Cache-Control', 'no-store');
+//   console.log("ข้อมูลที่ได้รับจาก body: ", req.body);
+//   console.log("ข้อมูลที่ได้รับจากไฟล์: ", req.file);
+
+//   const { userId, orderId } = req.body;
+
+//   const image = req.file ? req.file.filename : null;
+
+//   if (!image) {
+//     return res.status(400).json({ message: "Image is required." });
+//   }
+
+//   // คัดลอกไฟล์ไปยังปลายทางที่สอง
+//   const sourcePath = path.join(firstDestination, image);
+//   const targetPath = path.join(secondDestination, image);
+
+//   console.log("Image filename: ", image);
+//   console.log("userId: ", userId);
+//   console.log("orderId: ", orderId);
+
+//   if (!userId || !orderId ) {
+//     return res.status(400).json({ message: "Some fields are missing or invalid." });
+//   }
+
+//   fs.copyFile(sourcePath, targetPath, (err) => {
+//     if (err) {
+//       console.error("Error copying file:", err);
+//     } else {
+//       console.log("File copied to second destination:", targetPath);
+//     }
+//   });
+
+//   try {
+
+//     const conn = await poolLoginlaravel.getConnection();
+
+//     try {
+//       // ตรวจสอบว่า seller_id มีอยู่ในระบบหรือไม่
+//       const [userIdExists] = await conn.query(`SELECT user_id FROM ordersexample WHERE user_id = ?`, [userId]);
+//       console.log("userIdExists: ", userIdExists);
+
+//       // ตรวจสอบผลลัพธ์จากการ query ของ category
+//       // const [categoryDataArray] = await conn.query(GET_CATEGORY_QUERY, [category]);
+//       // console.log("categoryDataArray: ", categoryDataArray);
+
+//       // // หากเป็นอ็อบเจ็กต์ ให้เข้าถึงข้อมูล categories_id
+//       // let categoriesId = null;
+//       // if (categoryDataArray && categoryDataArray.categories_id) {
+//       //   categoriesId = String(categoryDataArray.categories_id);
+//       //   console.log("categoriesId: ", categoriesId);
+//       // } else {
+//       //   return res.status(400).json({ message: "ไม่พบหมวดหมู่ที่ระบุ." });
+//       // }
+
+
+//       // เพิ่มข้อมูลสินค้า
+//       const UpdateSlipImage = await conn.query(UPDATE_ORDERSEXAMPLE_QUERY, [
+//         image,
+//         orderId,
+//         userId
+//       ],
+//       console.log("All Log:",UpdateSlipImage,
+//         image,
+//         orderId,
+//         userId)
+//     );
+
+//       console.log("UpdateSlipImage: ", UpdateSlipImage);
+
+//       if (!UpdateSlipImage || !UpdateSlipImage.insertId) {
+//         return res.status(500).json({ message: "Failed to insert product." });
+//       }
+
+//       res.json({
+//         message: "Update slip Image successfully",
+//       });
+//     } catch (queryErr) {
+//       console.error("Database Query Error:", queryErr.message);
+//       res.status(500).json({ message: "Failed to add product", error: queryErr.message });
+//     } finally {
+//       conn.release(); // ปิดการเชื่อมต่อฐานข้อมูล
+//     }
+//   } catch (connErr) {
+//     console.error("Database Connection Error:", connErr.message);
+//     res.status(500).json({ message: "Failed to connect to database", error: connErr.message });
+//   }
+// });
 
 
 
@@ -1270,211 +1535,6 @@ app.put('/api/profile', upload.single('image_profile'), (req, res) => {
 });
 
 
-
-//////////////     ตัวทกลองที่2 ค่อนข้างสมบูรณ์ขาดแสดงและบันทึกลง Database     ///////////////
-// // ตั้งค่าการจัดเก็บไฟล์ด้วย multer
-// const storage = multer.diskStorage({
-//   destination: (req, file, cb) => {
-//     cb(null, path.join(__dirname, '../frontend/public/images/userprofile')); // โฟลเดอร์เก็บไฟล์
-//   },
-//   filename: (req, file, cb) => {
-//     cb(null, Date.now() + path.extname(file.originalname)); // ตั้งชื่อไฟล์แบบไม่ซ้ำ
-//   },
-// });
-
-// const upload = multer({ storage });
-
-// // Update Profile Endpoint
-// app.put('/api/profile', upload.single('image_profile'), (req, res) => {
-//   res.set('Cache-Control', 'no-store'); // ห้ามแคช
-
-//   const userId = req.query.userId; // ดึง userId จาก query parameters
-
-//   // ข้อมูลที่ส่งมาจาก body
-//   const { username, name, email, phoneNumber, Gender, date_of_birth } = req.body;
-
-//   // Path ของรูปภาพที่อัปโหลด
-//   let imagePath = req.file ? `images/userprofile/${req.file.filename}` : null;
-
-//   const UPDATE_QUERY = `
-//     UPDATE users
-//     SET username = ?, name = ?, email = ?, phoneNumber = ?, Gender = ?, date_of_birth = ?, image_profile = ?
-//     WHERE id = ?
-//   `;
-
-//   poolLoginlaravel
-//     .getConnection()
-//     .then(conn => {
-//       conn.query(UPDATE_QUERY, [
-//         username,
-//         name,
-//         email,
-//         phoneNumber,
-//         Gender,
-//         date_of_birth,
-//         imagePath,
-//         userId,
-//       ])
-//         .then(() => {
-//           res.json({ message: "Profile updated successfully" });
-//           conn.release();
-//         })
-//         .catch(err => {
-//           console.error(err);
-//           res.status(500).json({ message: "Error updating profile" });
-//           conn.release();
-//         });
-//     })
-//     .catch(err => {
-//       console.error(err);
-//       res.status(500).json({ message: "Database connection error" });
-//     });
-// });
-
-
-////////        ตัวทดลองแรก Prototype ค่อนข้างดี           ////////
-// // ตั้งค่าการจัดเก็บไฟล์ด้วย multer
-// const storage = multer.diskStorage({
-//   destination: (req, file, cb) => {
-//     cb(null, path.join(__dirname, '../frontend/public/images/userprofile')); // ใช้ path.absolute // เก็บไฟล์ในโฟลเดอร์ 'public/images' , '../frontend/public/images/userprofile');
-//   },
-//   filename: (req, file, cb) => {
-//     cb(null, Date.now() + path.extname(file.originalname)); // ตั้งชื่อไฟล์แบบไม่ซ้ำกัน
-//   },
-// });
-
-// const upload = multer({ storage });
-
-
-// //update 
-// app.put('/api/profile',upload.single('image_profile'), (req, res) => {
-//   res.set('Cache-Control', 'no-store');  // ห้ามแคช
-//   //const userId = req.user.id; // Assume user ID is decoded from JWT
-//   const userId = req.query.userId; // ดึง userId จาก query parameters
-
-//   console.log("user_Id put: ", userId);
-
-//   const { username, name, email, phoneNumber, Gender, date_of_birth , profileImage } = req.body;
-
-//   console.log("req.body put: ", req.body);
-
-//   let imagePath = profileImage;
-//   if (req.file) {
-//     imagePath = req.file.path;  // เก็บ path ของไฟล์ภาพที่อัปโหลด
-//   }
-
-//   const UPDATE_QUERY = `
-//     UPDATE users
-//     SET username = ?, name = ?, email = ?, phoneNumber = ?, Gender = ?, date_of_birth = ?, image_profile = ?
-//     WHERE id = ?`;
-
-//   poolLoginlaravel.getConnection()
-//     .then(conn =>
-//       conn.query(UPDATE_QUERY, [username, name, email, phoneNumber, Gender, date_of_birth, profileImage,  userId])
-//         .then(() => {
-//           res.json({ message: "Profile updated successfully" });
-//           conn.release();
-//         })
-//         .catch(err => {
-//           console.error(err);
-//           res.status(500).json({ message: "Error updating profile" });
-//           conn.release();
-//         })
-//     )
-//     .catch(err => {
-//       console.error(err);
-//       res.status(500).json({ message: "Database connection error" });
-//     });
-// });
-
-
-
-// const authenticateToken = (req, res, next) => {
-//   const token = req.header('Authorization')?.split(' ')[1]; // รับ token จาก header
-//   console.log(token);  // เช็คว่า token ที่ได้จาก header ถูกต้องหรือไม่
-
-//   if (!token) {
-//       return res.status(401).json({ message: 'Access denied. No token provided.' });
-//   }
-
-//   try {
-//       const decoded = jwt.verify(token, `${TOKEN_PROCESS}`); // ใช้ secret key ของคุณ
-//       req.user = decoded; // เก็บข้อมูล user จาก token
-//       next(); // ไปยัง next middleware หรือ route handler
-//   } catch (err) {
-//       res.status(400).json({ message: 'Invalid token.' });
-//   }
-// };
-
-// app.post('/api/cart/add', (req, res) => {
-//   const { userId, productId, quantity } = req.body; 
-
-//   console.log('Api user data:', {
-//         userId,
-//         productId,
-//         // _id_newArrival,
-//         quantity,
-//         // _idassets
-//       });
-
-//   if (!userId || !productId || !quantity) {
-//     return res.status(400).json({ error: "Missing required fields" });
-//   }
-
-//   const INSERT_QUERY = `INSERT INTO cart_items (user_id, product_id, quantity_id) 
-//                         VALUES (?, ?, ?) 
-//                         ON DUPLICATE KEY UPDATE quantity_id = quantity_id + ?`;
-
-//   poolLoginlaravel.getConnection()
-//     .then(conn => {
-//       return conn.query(INSERT_QUERY, [userId, productId, quantity, quantity])
-//         .then(() => {
-//           // ดึงข้อมูลจาก `cart_items` และ `products`
-//           return conn.query(`
-//             SELECT 
-//               ci.id, 
-//               ci.quantity_id AS quantity, 
-//               ci.added_at, 
-//               p.name AS productName, 
-//               p.price, 
-//               p.image
-//             FROM cart_items ci
-//             INNER JOIN products p ON ci.product_id = p._id
-//             WHERE ci.user_id = ?`, [userId]);
-//         })
-//         .then(productsResults => {
-//           conn.release();
-
-//           // ดึงข้อมูลจาก `new_arrivals` โดยใช้ poolBestSaller
-//           return poolBestSaller.getConnection()
-//             .then(conn2 => {
-//               return conn2.query(`
-//                 SELECT _id, image2, productName, price, color, badge, des 
-//                 FROM new_arrivals 
-//                 WHERE _id = ?`, [productId])
-//                 .then(newArrivalResults => {
-//                   conn2.release();
-
-//                   // รวมข้อมูล products + new_arrivals
-//                   const combinedResults = [...productsResults, ...newArrivalResults];
-
-//                   console.log('Item added to cart successfully', combinedResults);
-//                   res.status(200).json(combinedResults);
-//                 });
-//             });
-//         })
-//         .catch(err => {
-//           console.error('Error inserting item:', err);
-//           res.status(500).json({ error: 'Failed to add item to cart' });
-//         });
-//     })
-//     .catch(err => {
-//       console.error('Connection error:', err);
-//       res.status(500).json({ error: 'Database connection failed' });
-//     });
-// });
-
-
 app.post('/api/cart/add', (req, res) => {
   const { userId, productId, quantity } = req.body; // แก้ไขให้ตรงกับที่ส่งจาก client ,_idassets, _id_newArrival
 
@@ -1719,8 +1779,10 @@ app.delete('/api/cart/deleteall', (req, res) => {
     });
 });
 
-app.delete('/api/order', (req, res) => {
+
+app.post('/api/cancel-order', async (req, res) => {
   const { userId, allIds, orderId, referenceNumber } = req.body;
+  console.log("delete order req.body: ",req.body);
 
   console.log("Request Body:", req.body);
 
@@ -1728,41 +1790,170 @@ app.delete('/api/order', (req, res) => {
     return res.status(400).json({ error: "Missing userId or invalid allIds" });
   }
 
-  const productIds = allIds.map(item => item.id); // สร้าง array ของ product_id
-  console.log("userId And productIds: ", userId, productIds);
+  let conn;
+  try {
+    conn = await poolLoginlaravel.getConnection();
+    await conn.beginTransaction();
 
-  // คำสั่ง SQL สำหรับการอัปเดต status ใน orderexample เป็น 'Cancelled'
-  const UPDATE_ORDER_STATUS_QUERY = `UPDATE ordersexample SET status = 'Cancelled' WHERE order_id = ? AND referenceNumber IN (?)`;
+    // อัปเดตสถานะออเดอร์เป็น 'Cancelled'
+    const UPDATE_ORDER_STATUS_QUERY = `
+      UPDATE ordersexample 
+      SET status = 'Cancelled' 
+      WHERE order_id = ? AND referenceNumber = ?;
+    `;
 
-  const DELETE_CART_QUERY = `DELETE FROM cart_items WHERE user_id = ? AND product_id IN (?)`;
+    await conn.query(UPDATE_ORDER_STATUS_QUERY, [orderId, referenceNumber]);
 
-  poolLoginlaravel.getConnection()
-    .then(conn => {
-      return conn.beginTransaction()
-      .then(() => {
-        // อัปเดต status ใน orderexample
-        return conn.query(UPDATE_ORDER_STATUS_QUERY, [orderId, referenceNumber]);
-      })
-        .then(() => {
-          return conn.query(DELETE_CART_QUERY, [userId, productIds]);
-        })
-        .then(() => {
-          conn.commit(); // ยืนยัน transaction
-          res.status(200).json({ message: "Cart items deleted successfully." });
-        })
-        .catch(err => {
-          conn.rollback(); // ย้อนกลับ transaction
-          console.error("Error deleting cart:", err);
-          res.status(500).json({ error: "Failed to delete cart items." });
-        })
-        .finally(() => {
-          conn.release(); // ปล่อย connection
-        });
-    })
-    .catch(err => {
-      console.error("Connection error:", err);
-      res.status(500).json({ error: "Database connection failed." });
+    // คืนค่า stock กลับไป
+    const UPDATE_STOCK_QUERY = `
+      UPDATE products 
+      SET qty = qty + ? 
+      WHERE id = ?;
+    `;
+
+    for (const item of allIds) {
+      console.log(`Returning stock for product ${item.id}: ${item.quantity}`);
+      await conn.query(UPDATE_STOCK_QUERY, [item.quantity, item.id]);
+    }
+
+    // ลบสินค้าออกจากตะกร้า
+    const DELETE_CART_QUERY = `
+      DELETE FROM cart_items 
+      WHERE user_id = ? AND product_id IN (?);
+    `;
+
+    const productIds = allIds.map(item => item.id);
+    await conn.query(DELETE_CART_QUERY, [userId, productIds]);
+
+    await conn.commit(); // ยืนยัน transaction
+
+    res.status(200).json({ 
+      message: "Order cancelled and stock returned successfully." 
     });
+
+  } catch (error) {
+    if (conn) await conn.rollback(); // ย้อนกลับ transaction ในกรณี error
+    console.error("Error cancelling order:", error);
+    res.status(500).json({ error: "Failed to cancel order." });
+
+  } finally {
+    if (conn) conn.release(); // ปล่อย connection
+  }
+});
+
+app.post('/api/remove-cart', async (req, res) => {
+  const { userId, allIds } = req.body;
+  console.log("remove-cart req.body: ",req.body);
+
+  console.log("Request Body:", req.body);
+
+  if (!userId || !Array.isArray(allIds) || allIds.length === 0) {
+    return res.status(400).json({ error: "Missing userId or invalid allIds" });
+  }
+
+  let conn;
+  try {
+    conn = await poolLoginlaravel.getConnection();
+    await conn.beginTransaction();
+
+    // // อัปเดตสถานะออเดอร์เป็น 'Cancelled'
+    // const UPDATE_ORDER_STATUS_QUERY = `
+    //   UPDATE ordersexample 
+    //   SET status = 'Cancelled' 
+    //   WHERE order_id = ? AND referenceNumber = ?;
+    // `;
+
+    // await conn.query(UPDATE_ORDER_STATUS_QUERY, [orderId, referenceNumber]);
+
+    // // คืนค่า stock กลับไป
+    // const UPDATE_STOCK_QUERY = `
+    //   UPDATE products 
+    //   SET qty = qty + ? 
+    //   WHERE id = ?;
+    // `;
+
+    // for (const item of allIds) {
+    //   console.log(`Returning stock for product ${item.id}: ${item.quantity}`);
+    //   await conn.query(UPDATE_STOCK_QUERY, [item.quantity, item.id]);
+    // }
+
+    // ลบสินค้าออกจากตะกร้า
+    const DELETE_CART_QUERY = `
+      DELETE FROM cart_items 
+      WHERE user_id = ? AND product_id IN (?);
+    `;
+
+    const productIds = allIds.map(item => item.id);
+    await conn.query(DELETE_CART_QUERY, [userId, productIds]);
+
+    await conn.commit(); // ยืนยัน transaction
+    res.status(200).json({ 
+      message: "Order cancelled and stock returned successfully." 
+    });
+
+  } catch (error) {
+    if (conn) await conn.rollback(); // ย้อนกลับ transaction ในกรณี error
+    console.error("Error cancelling order:", error);
+    res.status(500).json({ error: "Failed to cancel order." });
+
+  } finally {
+    if (conn) conn.release(); // ปล่อย connection
+  }
+});
+
+
+app.post('/api/order-uploadslip', async (req, res) => {
+  const { userId, allIds, orderId, referenceNumber } = req.body;
+  console.log("uploadslip order req.body: ", req.body);
+
+  if (!userId || !Array.isArray(allIds) || allIds.length === 0) {
+    return res.status(400).json({ error: "Missing userId or invalid allIds" });
+  }
+
+  let conn;
+  try {
+    conn = await poolLoginlaravel.getConnection();
+    await conn.beginTransaction();
+
+    // ✅ อัปเดตสถานะออเดอร์เป็น 'Paid' หลังจากแนบสลิป
+    const UPDATE_ORDER_STATUS_QUERY = `
+      UPDATE ordersexample 
+      SET status = 'Pending' 
+      WHERE order_id = ? AND referenceNumber = ?;
+    `;
+
+    await conn.query(UPDATE_ORDER_STATUS_QUERY, [orderId, referenceNumber]);
+
+    // ✅ ลด stock ตามจำนวนสินค้าที่สั่งซื้อ
+    const UPDATE_STOCK_QUERY = `
+      UPDATE products 
+      SET qty = qty - ? 
+      WHERE id = ? AND qty >= ?;  -- ตรวจสอบว่าสินค้ามีเพียงพอ
+    `;
+
+    for (const item of allIds) {
+      console.log(`Reducing stock for product ${item.id}: ${item.quantity}`);
+      const [result] = await conn.query(UPDATE_STOCK_QUERY, [item.quantity, item.id, item.quantity]);
+
+      if (result.affectedRows === 0) {
+        throw new Error(`Insufficient stock for product ID: ${item.id}`);
+      }
+    }
+
+    await conn.commit(); // ยืนยัน transaction
+
+    res.status(200).json({ 
+      message: "Stock updated and order marked as Paid successfully." 
+    });
+
+  } catch (error) {
+    if (conn) await conn.rollback(); // ย้อนกลับ transaction ในกรณี error
+    console.error("Error updating order and stock:", error);
+    res.status(500).json({ error: "Failed to update stock." });
+
+  } finally {
+    if (conn) conn.release(); // ปล่อย connection
+  }
 });
 
 
@@ -2098,6 +2289,8 @@ app.put('/api/cart/update', (req, res) => {
 //       res.status(500).json({ error: 'Database connection failed' });
 //     });
 // });
+
+
 app.post('/api/neworder', async (req, res) => {
   const { userId,referenceNumber, items } = req.body;
 
@@ -2176,6 +2369,50 @@ app.post('/api/neworder', async (req, res) => {
 });
 
 
+
+const omise = Omise({
+  publicKey: "pkey_test_62v61ib2b24r1r829oc",
+  secretKey: "skey_test_62v61ibkldcjv3vmrhc",
+});
+
+app.post("/create-promptpay", async (req, res) => {
+  try {
+    // ✅ 1. สร้าง Source ของ PromptPay
+    const source = await omise.sources.create({
+      type: "promptpay",
+      amount: req.body.amount,
+      currency: req.body.currency,
+    });
+
+    console.log("Source response:", source); // ✅ Debug source response
+
+    if (!source.id) {
+      throw new Error("Failed to create PromptPay source");
+    }
+
+    // ✅ 2. ใช้ source.id เพื่อสร้าง Charge
+    const charge = await omise.charges.create({
+      amount: req.body.amount,
+      currency: req.body.currency,
+      source: source.id,
+    });
+
+    console.log("Charge response:", charge); // ✅ Debug charge response
+
+    if (!charge.source || !charge.source.scannable_code) {
+      throw new Error("PromptPay charge does not contain scannable_code");
+    }
+
+    // ✅ 3. ส่ง QR Code กลับไปให้ Frontend
+    res.json({ qr_code: charge.source.scannable_code.image.download_uri });
+  } catch (error) {
+    console.error("Omise Error:", error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+
+
 // Endpoint สำหรับรับข้อมูลการชำระเงินจาก Webhook
 // app.post('/api/webhook', (req, res) => {
 //   const paymentData = req.body; // ข้อมูลการชำระเงินที่ส่งมาจากธนาคารหรือผู้ให้บริการ
@@ -2191,12 +2428,12 @@ app.post('/api/neworder', async (req, res) => {
 
 
 // WebSocket Connection
-wss.on('connection', ws => {
-  console.log('WebSocket connection established');
-  ws.on('message', message => {
-    console.log('received: %s', message);
-  });
-});
+// wss.on('connection', ws => {
+//   console.log('WebSocket connection established');
+//   ws.on('message', message => {
+//     console.log('received: %s', message);
+//   });
+// });
 
 // Endpoint รับ Webhook
 // app.post('/api/webhook', (req, res) => {
@@ -2288,8 +2525,131 @@ app.post('/api/insert-qrCodeUrl', (req, res) => {
         console.error('Error updating order QR code:', err);
         res.status(500).json({ error: 'Failed to update order with QR code' });
       });
-  // });
+ });
+
+
+ // });
+// app.post('/api/update-stock', async (req, res) => {
+//   console.log("Received stock update request:", req.body);
+//   const { items } = req.body;
+
+//   if (!items || !Array.isArray(items) || items.length === 0) {
+//     return res.status(400).json({ message: "Invalid request data." });
+//   }
+
+//   let conn;
+//   try {
+//     conn = await poolLoginlaravel.getConnection();
+
+//     const updateProductStockQuery = `
+//       UPDATE products 
+//       SET qty = qty - ? 
+//       WHERE id = ? AND qty >= ?;
+//     `;
+
+//     const selectStockQuery = `SELECT qty FROM products WHERE id = ?;`;
+
+//     let updatedStocks = [];
+
+//     for (const item of items) {
+//       console.log("Updating stock for product:", item.id);
+
+//       const updateResult = await conn.query(updateProductStockQuery, [
+//         item.quantity,
+//         item.id,
+//         item.quantity
+//       ]);
+
+//       if (updateResult.affectedRows === 0) {
+//         throw new Error(`Insufficient stock for product ID: ${item.id}`);
+//       }
+
+//       // 📌 ดึงค่าจำนวนสินค้าที่เหลือ
+//       const stockResult = await conn.query(selectStockQuery, [item.id]);
+//       const remainingQty = stockResult[0]?.qty ?? 0; // ถ้าไม่พบสินค้าให้เป็น 0
+
+//       updatedStocks.push({ productId: item.id, remainingQty });
+//       console.log("updatedStocks: ",updatedStocks);
+//       console.log("stockResult: ",stockResult);
+//       console.log("remainingQty: ",remainingQty);
+//     }
+
+//     res.status(200).json({ 
+//       message: "Stock updated successfully.",
+//       updatedStocks // ส่งค่าที่เหลือกลับไป
+//     });
+
+//   } catch (error) {
+//     console.error("Error updating stock:", error.message);
+//     res.status(500).json({ message: "Error updating stock.", error: error.message });
+//   } finally {
+//     if (conn) conn.release();
+//   }
+// });
+
+
+app.post('/api/update-stock', async (req, res) => {
+  const { items } = req.body;
+  console.log("items: ",items);
+  console.log("req.body: ",req.body);
+  
+  if (!items || !Array.isArray(items) || items.length === 0) {
+    return res.status(400).json({ message: "Invalid request data." });
+  }
+
+  let conn;
+
+  try {
+    conn = await poolLoginlaravel.getConnection();
+
+    const updateProductStockQuery = `
+      UPDATE products
+      SET qty = qty - ?
+      WHERE id = ? AND qty >= ?;
+    `;
+
+    for (const item of items) {
+      console.log("Updating stock id for product:", item.id);
+      console.log("Updating stock quantity for product:", item.quantity);
+
+      conn.query(updateProductStockQuery, [item.quantity, item.id, item.quantity], (err, result) => {
+        if (err) {
+          console.error("Error updating stock:", err);
+          return;
+        }
+        console.log("updateResult:", result);
+        console.log("Affected Rows:", result.affectedRows);
+      });
+      
+      
+      // const updateResult = await conn.query(updateProductStockQuery, [
+      //   item.quantity, 
+      //   item.id, 
+      //   item.quantity 
+      // ]);
+      // ลดลงตามจำนวนที่ซื้อ
+       // อ้างอิงสินค้าจาก ID
+       // ตรวจสอบว่ามีของพอไหม
+      // console.log("updateResult: ",updateResult.item.quantity);
+      // console.log("updateResult: ",item.quantity);
+      // console.log("updateResult: ",updateResult);
+      // // console.log("updateResult: ",updateResult.affectedRows);
+
+      // if (updateResult.affectedRows === 0) {
+      //   throw new Error(`Insufficient stock for product ID: ${item.id}`);
+      // }
+    }
+
+    res.status(200).json({ message: "Stock updated successfully." });
+  } catch (error) {
+    console.error("Error updating stock:", error.message);
+    res.status(500).json({ message: "Error updating stock.", error: error.message });
+  } finally {
+    if (conn) conn.release();
+  }
 });
+
+
 
 // ฟังก์ชันที่ใช้สร้างข้อมูล QR Code
 // function generatePayload(promptPayID, { amount }) {
@@ -2488,7 +2848,7 @@ app.get('/api/transaction/:referenceNumber', async (req, res) => {///:transactio
   console.log("referenceNumber req.params: ",req.params);
 
   const getTransactionQuery = `
-    SELECT referenceNumber, Transaction_id, QRCodeUrl FROM ordersexample
+    SELECT referenceNumber, Transaction_id, FinalAmount, QRCodeUrl FROM ordersexample
     WHERE referenceNumber = ?
   `;
   // const getTransactionQuery = `
@@ -2506,6 +2866,7 @@ app.get('/api/transaction/:referenceNumber', async (req, res) => {///:transactio
       res.status(200).json({
         referenceNumber: rows[0].referenceNumber,
         transactionID: rows[0].Transaction_id,
+        finalAmount: rows[0].FinalAmount,
         qrCodeUrl: rows[0].QRCodeUrl,
       });
     } else {
@@ -3489,4 +3850,73 @@ app.listen(PORT, () => {
 // app.listen(port, '0.0.0.0', () => {
 //   console.log(`Server is running on http://0.0.0.0:${port}`);
 //   console.log(`Accessible on your network via http://<YOUR_IP>:${port}`);
+// });
+
+
+// 🚀 สร้าง WebSocket Server
+const wss = new WebSocket.Server({ port: WSS_PORT }, () => {
+  console.log(`WebSocket Server running on ws://localhost:${WSS_PORT}`);
+});
+
+wss.on('connection', (ws) => {
+  console.log('🔌 WebSocket connected');
+
+  ws.on('message', (message) => {
+    console.log('📥 Message received from client:', message);
+
+    // ตัวอย่างการแปลงข้อมูลจาก client
+    const data = JSON.parse(message);
+    console.log('📥 data message:', data);
+
+    // ทำการตรวจสอบข้อมูลที่รับมาจาก client
+    if (data.referenceNumber === 'GEKM71NAUDU' && data.status === 'paid') {
+      // ส่งข้อมูลกลับไปยัง client
+      const response = {
+        message: 'Payment confirmed!',
+        referenceNumber: data.referenceNumber,
+        status: data.status
+      };
+
+      ws.send(JSON.stringify(response));
+      console.log('📤 Sent response to client:', response);
+    } else {
+      const errorResponse = {
+        message: 'Invalid data received.',
+      };
+
+      ws.send(JSON.stringify(errorResponse));
+      console.log('📤 Sent error response to client:', errorResponse);
+    }
+  });
+
+  ws.on('close', () => {
+    console.log('❌ WebSocket connection closed');
+  });
+});
+
+// // 📡 ฟังก์ชันส่งข้อมูลไปยัง client ทุกคน
+// function broadcast(data) {
+//   wss.clients.forEach((client) => {
+//     if (client.readyState === WebSocket.OPEN) {
+//       client.send(JSON.stringify(data));
+//     }
+//   });
+// }
+
+// // 📌 API อัปเดตสถานะชำระเงิน (ใช้จากระบบชำระเงิน)
+// app.post("/api/order/update", (req, res) => {
+//   const { referenceNumber, status } = req.body;
+
+//   console.log("req.body", req.body);
+  
+//   if (orderStatus[referenceNumber]) {
+//     orderStatus[referenceNumber] = status;
+    
+//     // 🔔 แจ้งเตือนทุก client ผ่าน WebSocket
+//     broadcast({ referenceNumber, status });
+
+//     res.json({ message: "Order updated", referenceNumber, status });
+//   } else {
+//     res.status(404).json({ error: "Order not found" });
+//   }
 // });
