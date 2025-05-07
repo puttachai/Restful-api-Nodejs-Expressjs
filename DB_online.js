@@ -5,7 +5,7 @@ const cors = require('cors'); // Import CORS module
 const jwt = require('jsonwebtoken');
 const app = express();
 require('dotenv').config();
-// const http = require('http'); // ✅ เพิ่มบรรทัดนี้
+// const http = require('http'); // 
 const WebSocket = require('ws');
 // const QRCode = require('qrcode');
 const PORT = 5000;//3002 process.env.PORT || process.env.PORT || 5000
